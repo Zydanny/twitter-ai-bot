@@ -35,20 +35,32 @@ def get_trending_youtube_video(topic):
     try:
         youtube = build('youtube', 'v3', developerKey=GOOGLE_API_KEY)
         seven_days_ago = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)).isoformat()
-        request = Youtube().list(
-            part="snippet", q=f"{topic} highlights stream", type="video", order="viewCount",
-            maxResults=1, relevanceLanguage="en", publishedAfter=seven_days_ago
+
+        # This is the corrected API call structure
+        request = youtube.search().list(
+            part="snippet",
+            q=f"{topic} highlights stream",
+            type="video",
+            order="viewCount",
+            maxResults=1,
+            relevanceLanguage="en",
+            publishedAfter=seven_days_ago
         )
         response = request.execute()
+
         if response.get("items"):
             video = response["items"][0]
-            title, description = video["snippet"]["title"], video["snippet"]["description"]
-            video_id, video_url = video["id"]["videoId"], f"https://www.youtube.com/watch?v={video['id']['videoId']}"
+            title = video["snippet"]["title"]
+            description = video["snippet"]["description"]
+            video_id = video["id"]["videoId"]
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+            
             print(f"  - Found top video: \"{title}\"")
             return title, description, video_url
         else:
             print(f"  - No relevant YouTube videos found for '{topic}'.")
             return None, None, None
+            
     except HttpError as e:
         print(f"  - An HTTP error {e.resp.status} occurred: {e.content}")
         return None, None, None
@@ -62,10 +74,17 @@ def generate_tweet_from_video(topic_name, title, description, video_url):
     try:
         genai.configure(api_key=GOOGLE_API_KEY)
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        prompt = (f"You are a social media commentator. The following is a top trending YouTube video about '{topic_name}'. Rewrite the title and description into an engaging, short, and exciting tweet. Mention what happened in the video and include the video link at the end. Keep the tweet under 280 characters. Do not just copy the title. Title: \"{title}\"\nDescription: \"{description}\"\nVideo URL: {video_url}")
+        
+        prompt = (f"You are a social media commentator. The following is a top trending YouTube video about '{topic_name}'. "
+                  f"Rewrite the title and description into an engaging, short, and exciting tweet. "
+                  f"Mention what happened in the video and include the video link at the end. "
+                  f"Keep the tweet under 280 characters. Do not just copy the title. "
+                  f"Title: \"{title}\"\nDescription: \"{description}\"\nVideo URL: {video_url}")
+
         print("  - Sending video details to Gemini for tweet generation...")
         ai_response = model.generate_content(prompt)
-        print("---\nGenerated tweet content:")
+        print("---")
+        print("Generated tweet content:")
         return ai_response.text.strip()
     except Exception as e:
         print(f"Error generating content with Gemini: {e}")
@@ -75,33 +94,45 @@ def post_tweet(content):
     """Posts a tweet to your timeline."""
     if not content: return
     try:
-        # Note: Tweepy v2 uses Bearer Token for v2 endpoints, but API Key/Secret for v1.1 user-context posting.
-        # The following uses OAuth 1.0a for posting, which is correct for user-context actions.
         client = tweepy.Client(
             consumer_key=TWITTER_API_KEY, consumer_secret=TWITTER_API_SECRET,
             access_token=TWITTER_ACCESS_TOKEN, access_token_secret=TWITTER_ACCESS_TOKEN_SECRET
         )
         response = client.create_tweet(text=content)
-        print(f"---\nTweet posted successfully! Tweet ID: {response.data['id']}")
+        print("---")
+        print(f"Tweet posted successfully! Tweet ID: {response.data['id']}")
     except Exception as e:
         print(f"Error posting tweet: {e}")
 
 if __name__ == "__main__":
+    preview_mode = False
+    if len(sys.argv) > 1 and sys.argv[1].lower() == 'preview':
+        preview_mode = True
+        print("--- PREVIEW MODE ACTIVATED: This tweet will NOT be posted. ---")
+
     tweet_text = None
     max_retries = 10 
+    
     shuffled_list = random.sample(STREAMER_LIST, len(STREAMER_LIST))
+
     for i, selected_topic in enumerate(shuffled_list):
         if i >= max_retries:
             print(f"\nStopping after {max_retries} attempts to conserve API quota.")
             break
+            
         print(f"\n--- Attempt {i + 1}/{max_retries} ---")
         title, description, video_url = get_trending_youtube_video(selected_topic)
+        
         if title: 
             tweet_text = generate_tweet_from_video(selected_topic, title, description, video_url)
             break 
+        
         time.sleep(1) 
 
-    if tweet_text:
+    if tweet_text and not preview_mode:
         post_tweet(tweet_text)
+    elif tweet_text and preview_mode:
+        print(tweet_text)
+        print("--- END OF PREVIEW ---")
     else:
         print(f"\nCould not find a suitable video to tweet about after {max_retries} attempts.")
